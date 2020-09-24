@@ -17,11 +17,17 @@ from utils.general import (
     xyxy2xywh, plot_one_box, strip_optimizer, set_logging)
 from utils.torch_utils import select_device, load_classifier, time_synchronized
 
+def load_labels(labelf):
+    with open(labelf, 'r') as f:
+        names = []
+        for line in f:
+            names.append(line.strip())
+    return names
 
 def detect(save_img=False):
     out, source, weights, view_img, save_txt, imgsz = \
         opt.output, opt.source, opt.weights, opt.view_img, opt.save_txt, opt.img_size
-    webcam = source == '0' or source.startswith('rtsp') or source.startswith('http') or source.endswith('.txt')
+    webcam = source.isnumeric() or source.startswith(('rtsp://', 'rtmp://', 'http://')) or source.endswith('.txt')
 
     # Initialize
     set_logging()
@@ -55,7 +61,11 @@ def detect(save_img=False):
         dataset = LoadImages(source, img_size=imgsz)
 
     # Get names and colors
-    names = model.module.names if hasattr(model, 'module') else model.names
+    if opt.labels:
+        names = load_labels(opt.labels)
+    else:
+        names = model.module.names if hasattr(model, 'module') else model.names
+
     colors = [[random.randint(0, 255) for _ in range(3)] for _ in range(len(names))]
 
     # Run inference
@@ -161,6 +171,7 @@ if __name__ == '__main__':
     parser.add_argument('--agnostic-nms', action='store_true', help='class-agnostic NMS')
     parser.add_argument('--augment', action='store_true', help='augmented inference')
     parser.add_argument('--update', action='store_true', help='update all models')
+    parser.add_argument('--labels', default='', help='label file')
     opt = parser.parse_args()
     print(opt)
 
