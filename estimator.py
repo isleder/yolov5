@@ -9,10 +9,9 @@ from quaternion import eul2quat
 # const float CameraFOVH_rad = MICROSOFT_FOVH * M_PI / 180;
 # const float targetsize = 0.2; // meter
 
-
-def estimate_yaw_pitch_dist(camfovh, targ_sz, im_w, im_h, left, top, right, bot, euler):
-
-    x, y, z = euler
+# reurn euler (radian), quaternion, estimated distance
+def estimate_yaw_pitch_dist(camfovh, targ_sz, im_w, im_h, left, top, right, bot):
+    
     camfovh_rad = camfovh * math.pi / 180
     camerafovv_rad = camfovh_rad * im_h / im_w # werical angle in radian
 
@@ -28,7 +27,7 @@ def estimate_yaw_pitch_dist(camfovh, targ_sz, im_w, im_h, left, top, right, bot,
     
     z = math.atan2(x_offs2x * math.tan(camfovh_rad / 2), im_w) # yaw
     y = math.atan2(y_offs2x * math.tan(camfovh_rad / 2), im_h) # pitch
-    x = 0; #// camera roll
+    x = 0 #// camera roll
 
-    return eul2quat((x, y, z)), distance
+    return (x,y,z), eul2quat((x, y, z)), distance
 
