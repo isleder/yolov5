@@ -30,6 +30,7 @@ def quat2eul(quaternion):
 def eul2quat(euler):
 
     x,y,z = euler
+    
     cx = math.cos(x / 2)
     cy = math.cos(y / 2)
     cz = math.cos(z / 2)
