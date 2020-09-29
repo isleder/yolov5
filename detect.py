@@ -84,9 +84,8 @@ def detect(save_img=False):
     _ = model(img.half() if half else img) if device.type != 'cpu' else None  # run once
 
 
-
     # Detecttions filter
-    bbox_filter = BboxFilter(30, 3)
+    bbox_filter = BboxFilter(30, 10)
 
     # Object sizes
     # se, comml, jet, heli, drone
@@ -114,9 +113,7 @@ def detect(save_img=False):
         # Apply Classifier
         if classify:
             pred = apply_classifier(pred, modelc, img, im0s)
-
-
-        print("-----")
+        
         # Process detections
         for i, det in enumerate(pred):  # detections per image, this is always 1  except for maybe (batched images?)
             #print("i det",i, det)
@@ -199,7 +196,7 @@ def detect(save_img=False):
 
 
             boxes = bbox_filter.get_boxes()
-            print("filt boxes",boxes)
+            #print("filt boxes",boxes)
 
             for box in boxes:
                 print("b", box)
@@ -216,8 +213,11 @@ def detect(save_img=False):
 
                 eul, quat, dist = estimate_yaw_pitch_dist(CAM_FOVH, sz, imw, imh, x1, y1, x2, y2) 
 
-                if save_img or view_img:  # Add bbox to image                    
-                    label = '%s %.2f %.1f %.2f %.2f %.2f %.2f' % (names[int(cls)], conf, dist, quat[0], quat[1], quat[2], quat[3])
+                if save_img or view_img:  # Add bbox to image  
+                    # with quaternion                  
+                    # label = '%s %.2f %.1f %.2f %.2f %.2f %.2f' % (names[int(cls)], conf, dist, quat[0], quat[1], quat[2], quat[3])
+                    label = '%s %.2f %.1f' % (names[int(cls)], conf, dist)
+
                     print(label)
                     print("xyxy",xyxy)
                     plot_one_box(xyxy, im0, label=label, color=colors[int(cls)], line_thickness=2)
