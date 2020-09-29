@@ -17,6 +17,9 @@ from utils.general import (
     xyxy2xywh, plot_one_box, strip_optimizer, set_logging)
 from utils.torch_utils import select_device, load_classifier, time_synchronized
 
+from BboxFilter import BboxFilter
+from estimator import estimate_yaw_pitch_dist
+
 def load_labels(labelf):
     with open(labelf, 'r') as f:
         names = []
@@ -65,13 +68,32 @@ def detect(save_img=False):
         names = load_labels(opt.labels)
     else:
         names = model.module.names if hasattr(model, 'module') else model.names
+        
+    if opt.color == "same":
+        # same color for all
+        colors = [[255,0,255] for _ in range(len(names))]
+    else:
+        if opt.color == "det":
+            random.seed(2)
 
-    colors = [[random.randint(0, 255) for _ in range(3)] for _ in range(len(names))]
+        colors = [[random.randint(0, 255) for _ in range(3)] for _ in range(len(names))]
 
     # Run inference
     t0 = time.time()
     img = torch.zeros((1, 3, imgsz, imgsz), device=device)  # init img
     _ = model(img.half() if half else img) if device.type != 'cpu' else None  # run once
+
+
+
+    # Detecttions filter
+    bbox_filter = BboxFilter(30, 3)
+
+    # Object sizes
+    # se, comml, jet, heli, drone
+    OBj_SIZES = (10.0, 30.0, 10.0, 5.0, 0.3)
+    CAM_FOVH = 60 # degree
+
+
     for path, img, im0s, vid_cap in dataset:
         img = torch.from_numpy(img).to(device)
         img = img.half() if half else img.float()  # uint8 to fp16/32
@@ -83,6 +105,8 @@ def detect(save_img=False):
         t1 = time_synchronized()
         pred = model(img, augment=opt.augment)[0]
 
+        #print("pred shape", pred.shape)
+
         # Apply NMS
         pred = non_max_suppression(pred, opt.conf_thres, opt.iou_thres, classes=opt.classes, agnostic=opt.agnostic_nms)
         t2 = time_synchronized()
@@ -91,17 +115,25 @@ def detect(save_img=False):
         if classify:
             pred = apply_classifier(pred, modelc, img, im0s)
 
+
+        print("-----")
         # Process detections
-        for i, det in enumerate(pred):  # detections per image
+        for i, det in enumerate(pred):  # detections per image, this is always 1  except for maybe (batched images?)
+            #print("i det",i, det)
+
             if webcam:  # batch_size >= 1
                 p, s, im0 = path[i], '%g: ' % i, im0s[i].copy()
             else:
                 p, s, im0 = path, '', im0s
 
+            imh, imw, _ = im0.shape                    
+
+
             save_path = str(Path(out) / Path(p).name)
             txt_path = str(Path(out) / Path(p).stem) + ('_%g' % dataset.frame if dataset.mode == 'video' else '')
             s += '%gx%g ' % img.shape[2:]  # print string
             gn = torch.tensor(im0.shape)[[1, 0, 1, 0]]  # normalization gain whwh
+
             if det is not None and len(det):
                 # Rescale boxes from img_size to im0 size
                 det[:, :4] = scale_coords(img.shape[2:], det[:, :4], im0.shape).round()
@@ -113,25 +145,93 @@ def detect(save_img=False):
 
                 # Write results
                 for *xyxy, conf, cls in reversed(det):
+
+                    x1,y1,x2,y2 = int(xyxy[0]), int(xyxy[1]), int(xyxy[2]), int(xyxy[3])
+                    bbox_filter.add((x1,y1,x2,y2), conf.item(), int(cls))
+                    
+                    #print("imw", im0.shape, int(cls))
+
+                    # if int(cls) > len(OBj_SIZES):
+                    #     sz = 1.0
+                    # else:
+                    #     sz = OBj_SIZES[int(cls)]
+
+                    # eul, quat, dist = estimate_yaw_pitch_dist(CAM_FOVH, sz, imw, imh, x1, y1, x2, y2) 
+
                     if save_txt:  # Write to file
                         xywh = (xyxy2xywh(torch.tensor(xyxy).view(1, 4)) / gn).view(-1).tolist()  # normalized xywh
                         with open(txt_path + '.txt', 'a') as f:
                             f.write(('%g ' * 5 + '\n') % (cls, *xywh))  # label format
 
-                    if save_img or view_img:  # Add bbox to image
-                        label = '%s %.2f' % (names[int(cls)], conf)
-                        plot_one_box(xyxy, im0, label=label, color=colors[int(cls)], line_thickness=3)
+                    # if save_img or view_img:  # Add bbox to image
+                    #     label = '%s %.2f %.1f %.2f %.2f %.2f %.2f' % (names[int(cls)], conf, dist, quat[0], quat[1], quat[2], quat[3])
+                    #     plot_one_box(xyxy, im0, label=label, color=colors[int(cls)], line_thickness=2)
+
+
+
 
             # Print time (inference + NMS)
             print('%sDone. (%.3fs)' % (s, t2 - t1))
 
             # Stream results
+            # if view_img:
+            #     cv2.imshow(p, im0)
+            #     if cv2.waitKey(1) == ord('q'):  # q to quit
+            #         raise StopIteration
+
+            # Save results (image with detections)
+            # if save_img:
+            #     if dataset.mode == 'images':
+            #         cv2.imwrite(save_path, im0)
+            #     else:
+            #         if vid_path != save_path:  # new video
+            #             vid_path = save_path
+            #             if isinstance(vid_writer, cv2.VideoWriter):
+            #                 vid_writer.release()  # release previous video writer
+
+            #             fourcc = 'mp4v'  # output video codec
+            #             fps = vid_cap.get(cv2.CAP_PROP_FPS)
+            #             w = int(vid_cap.get(cv2.CAP_PROP_FRAME_WIDTH))
+            #             h = int(vid_cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+            #             vid_writer = cv2.VideoWriter(save_path, cv2.VideoWriter_fourcc(*fourcc), fps, (w, h))
+            #         vid_writer.write(im0)
+
+
+
+            boxes = bbox_filter.get_boxes()
+            print("filt boxes",boxes)
+
+            for box in boxes:
+                print("b", box)
+                xyxy, conf, cls = box
+            #     label = '%s %.2f' % (names[cls], conf)
+            #     print(label, conf)
+            #     plot_one_box(b, im0, label=label, color=colors[cls], line_thickness=3)
+
+
+                if int(cls) > len(OBj_SIZES):
+                    sz = 1.0
+                else:
+                    sz = OBj_SIZES[int(cls)]
+
+                eul, quat, dist = estimate_yaw_pitch_dist(CAM_FOVH, sz, imw, imh, x1, y1, x2, y2) 
+
+                if save_img or view_img:  # Add bbox to image                    
+                    label = '%s %.2f %.1f %.2f %.2f %.2f %.2f' % (names[int(cls)], conf, dist, quat[0], quat[1], quat[2], quat[3])
+                    print(label)
+                    print("xyxy",xyxy)
+                    plot_one_box(xyxy, im0, label=label, color=colors[int(cls)], line_thickness=2)
+
+                if save_txt:  # Write to file
+                    xywh = (xyxy2xywh(torch.tensor(xyxy).view(1, 4)) / gn).view(-1).tolist()  # normalized xywh
+                    with open(txt_path + '.txt', 'a') as f:
+                        f.write(('%g ' * 5 + '\n') % (cls, *xywh))  # label format
+
             if view_img:
                 cv2.imshow(p, im0)
                 if cv2.waitKey(1) == ord('q'):  # q to quit
                     raise StopIteration
 
-            # Save results (image with detections)
             if save_img:
                 if dataset.mode == 'images':
                     cv2.imwrite(save_path, im0)
@@ -147,6 +247,8 @@ def detect(save_img=False):
                         h = int(vid_cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
                         vid_writer = cv2.VideoWriter(save_path, cv2.VideoWriter_fourcc(*fourcc), fps, (w, h))
                     vid_writer.write(im0)
+
+
 
     if save_txt or save_img:
         print('Results saved to %s' % Path(out))
@@ -172,6 +274,8 @@ if __name__ == '__main__':
     parser.add_argument('--augment', action='store_true', help='augmented inference')
     parser.add_argument('--update', action='store_true', help='update all models')
     parser.add_argument('--labels', default='', help='label file')
+    parser.add_argument('--color', default='det', help='bbox colors --color same, --color rand, --color det') # det deterministic
+
     opt = parser.parse_args()
     print(opt)
 
