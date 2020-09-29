@@ -7,7 +7,8 @@ class BboxFilter:
         self.filter_sz = filter_sz
         self.filter_thresh = round(self.filter_sz/2)
         self.bbox_grid = {}
-        self.boxes = {} # collect added h
+        self.boxes = {} # lookup table
+        self.frame_boxes = set() # collect added h in frame
 
     def box_hash(self, bbox):
         x1,y1,x2,y2 = bbox
@@ -42,36 +43,44 @@ class BboxFilter:
 
     # use add to add boxes individually in concert with 
     # get_boxes 
-    def add(self, box):         
-        print(box)       
+    def add(self, box, conf, cls):         
+        #print("add",box)       
         # get new box hashes and add to grid or increment        
         h = self.box_hash(box)
 
-        if h in self.boxes:
-            print("already", h)
-            self.boxes[h] = box # last box overrides same box hashes
-            return # lets not double count 2 box in same frame
+        if h in self.frame_boxes:
+            #print("already", h)
+            self.boxes[h] = (box, conf, cls) # last box overrides same box hashes
+            self.frame_boxes.add(h)
+            return # lets not double count 2 box in same image
 
-        self.boxes[h] = box # last box overrides same box hashes
+        self.boxes[h] = (box, conf, cls) # last box overrides same box hashes #TODO add id
+        self.frame_boxes.add(h)
 
+        # store hash count in grid
         if h in self.bbox_grid:                
             if self.bbox_grid[h] < self.filter_sz: # limit to max count
                 self.bbox_grid[h] += 1    
         else:
             self.bbox_grid[h] = 1
 
-    def get_boxes(self):
-        boxes = []
-        for h in self.bbox_grid:
-            # decrement boxes not in the list min to 0
-            if h not in self.boxes and self.bbox_grid[h] > 0:
+    def get_boxes(self): # call it at every frame
+        bxs = []
+        # titerate the whole grid
+        for h in self.bbox_grid: 
+
+            # decremnent boxes that are not present in this frame's boxes
+            if h not in self.frame_boxes and self.bbox_grid[h] > 0:
                 self.bbox_grid[h] -= 1
+            
+            if self.bbox_grid[h] >= self.filter_thresh:                
+                bxs.append(self.boxes[h]) # yes add to returns
 
-            if self.bbox_grid[h] >= self.filter_thresh:
-                boxes.append(self.boxes[h]) # yes add to returns
+        self.frame_boxes = set() 
+        return bxs
 
-        self.boxes = {}
-        return boxes
+    # def add_get(self, box, conf, cls):
+    #     h = self.box_hash(box)
 
 
 def test():
@@ -111,14 +120,14 @@ def test2():
     bbox_filter = BboxFilter(30, 3)
     print(bbox_filter.bbox_grid)
 
-    bbox_filter.add((1876, 987, 1910, 1065))
-    bbox_filter.add((12,34,45,67))
+    bbox_filter.add((1876, 987, 1910, 1065), 0.12, 12)
+    bbox_filter.add((12,34,45,67),0.43,8)
     boxes = bbox_filter.get_boxes()
     print("grid",bbox_filter.bbox_grid)
     print(boxes)
 
-    bbox_filter.add((1900, 1000, 1919, 1079))
-    bbox_filter.add((12,34,45,64))
+    bbox_filter.add((1900, 1000, 1919, 1079), 0.3, 5)
+    bbox_filter.add((12,34,45,64),0.32,7)
     boxes = bbox_filter.get_boxes()
     print("grid",bbox_filter.bbox_grid)
     print(boxes)
