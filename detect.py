@@ -35,9 +35,13 @@ def detect(save_img=False):
     # Initialize
     set_logging()
     device = select_device(opt.device)
-    if os.path.exists(out):
-        shutil.rmtree(out)  # delete output folder
-    os.makedirs(out)  # make new output folder
+    
+    # if os.path.exists(out):
+    #     shutil.rmtree(out)  # delete output folder
+
+    if not os.path.exists(out):
+        os.makedirs(out)  # make new output folder
+        
     half = device.type != 'cpu'  # half precision only supported on CUDA
 
     # Load model
@@ -84,8 +88,8 @@ def detect(save_img=False):
     _ = model(img.half() if half else img) if device.type != 'cpu' else None  # run once
 
 
-    # Detecttions filter
-    bbox_filter = BboxFilter(30, 10)
+    # Detections filter
+    bbox_filter = BboxFilter(30, 5)
 
     # Object sizes
     # se, comml, jet, heli, drone
