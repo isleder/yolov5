@@ -9,8 +9,8 @@ from numpy import random
 
 from models.experimental import attempt_load
 from utils.datasets import LoadStreams, LoadImages
-from utils.general import check_img_size, check_requirements, non_max_suppression, apply_classifier, scale_coords, \
-    xyxy2xywh, strip_optimizer, set_logging, increment_path
+from utils.general import check_img_size, check_requirements, check_imshow, non_max_suppression, apply_classifier, \
+    scale_coords, xyxy2xywh, strip_optimizer, set_logging, increment_path
 from utils.plots import plot_one_box
 from utils.torch_utils import select_device, load_classifier, time_synchronized
 
@@ -40,7 +40,8 @@ def detect(save_img=False):
 
     # Load model
     model = attempt_load(weights, map_location=device)  # load FP32 model
-    imgsz = check_img_size(imgsz, s=model.stride.max())  # check img_size
+    stride = int(model.stride.max())  # model stride
+    imgsz = check_img_size(imgsz, s=stride)  # check img_size
     if half:
         model.half()  # to FP16
 
@@ -53,12 +54,12 @@ def detect(save_img=False):
     # Set Dataloader
     vid_path, vid_writer = None, None
     if webcam:
-        view_img = True
+        view_img = check_imshow()
         cudnn.benchmark = True  # set True to speed up constant image size inference
-        dataset = LoadStreams(source, img_size=imgsz)
+        dataset = LoadStreams(source, img_size=imgsz, stride=stride)
     else:
         save_img = True
-        dataset = LoadImages(source, img_size=imgsz)
+        dataset = LoadImages(source, img_size=imgsz, stride=stride)
 
     # Get names and colors
     if opt.labels:
@@ -76,21 +77,27 @@ def detect(save_img=False):
         colors = [[random.randint(0, 255) for _ in range(3)] for _ in range(len(names))]
 
     # Run inference
+    if device.type != 'cpu':
+        model(torch.zeros(1, 3, imgsz, imgsz).to(device).type_as(next(model.parameters())))  # run once
     t0 = time.time()
     img = torch.zeros((1, 3, imgsz, imgsz), device=device)  # init img
     _ = model(img.half() if half else img) if device.type != 'cpu' else None  # run once
 
-
-    # Detections filter
-    bbox_filter = BboxFilter(30, 5)
+    if opt.bboxfilt:
+        # Detections filter
+        bbox_filter = BboxFilter(30, 5)
 
     # Object sizes
     # se, comml, jet, heli, drone
     OBj_SIZES = (10.0, 30.0, 10.0, 5.0, 0.3)
     CAM_FOVH = 60 # degree
 
+    quit = False
 
     for path, img, im0s, vid_cap in dataset:
+
+        if quit: break
+
         img = torch.from_numpy(img).to(device)
         img = img.half() if half else img.float()  # uint8 to fp16/32
         img /= 255.0  # 0 - 255 to 0.0 - 1.0
@@ -135,13 +142,15 @@ def detect(save_img=False):
                 # Print results
                 for c in det[:, -1].unique():
                     n = (det[:, -1] == c).sum()  # detections per class
-                    s += f'{n} {names[int(c)]}s, '  # add to string
+                    s += f"{n} {names[int(c)]}{'s' * (n > 1)}, "  # add to string
 
                 # Write results
                 for *xyxy, conf, cls in reversed(det):
 
                     x1,y1,x2,y2 = int(xyxy[0]), int(xyxy[1]), int(xyxy[2]), int(xyxy[3])
-                    bbox_filter.add((x1,y1,x2,y2), conf.item(), int(cls))
+
+                    if opt.bboxfilt:
+                        bbox_filter.add((x1,y1,x2,y2), conf.item(), int(cls))
                     
                     #print("imw", im0.shape, int(cls))
 
@@ -151,18 +160,18 @@ def detect(save_img=False):
                     #     sz = OBj_SIZES[int(cls)]
 
                     # eul, quat, dist = estimate_yaw_pitch_dist(CAM_FOVH, sz, imw, imh, x1, y1, x2, y2) 
+                    else:
+                        if save_txt:  # Write to file
+                            xywh = (xyxy2xywh(torch.tensor(xyxy).view(1, 4)) / gn).view(-1).tolist()  # normalized xywh
+                            line = (cls, *xywh, conf) if opt.save_conf else (cls, *xywh)  # label format
+                            with open(txt_path + '.txt', 'a') as f:
+                                f.write(('%g ' * len(line)).rstrip() % line + '\n')
 
-                    if save_txt:  # Write to file
-                        xywh = (xyxy2xywh(torch.tensor(xyxy).view(1, 4)) / gn).view(-1).tolist()  # normalized xywh
-                        line = (cls, *xywh, conf) if opt.save_conf else (cls, *xywh)  # label format
-                        with open(txt_path + '.txt', 'a') as f:
-                            f.write(('%g ' * len(line)).rstrip() % line + '\n')
+                        if save_img or view_img:  # Add bbox to image
+                            label = f'{names[int(cls)]} {conf:.2f}'
+                            #     label = '%s %.2f %.1f %.2f %.2f %.2f %.2f' % (names[int(cls)], conf, dist, quat[0], quat[1], quat[2], quat[3])
 
-                    if save_img or view_img:  # Add bbox to image
-                        label = f'{names[int(cls)]} {conf:.2f}'
-                        #     label = '%s %.2f %.1f %.2f %.2f %.2f %.2f' % (names[int(cls)], conf, dist, quat[0], quat[1], quat[2], quat[3])
-
-                        plot_one_box(xyxy, im0, label=label, color=colors[int(cls)], line_thickness=3)
+                            plot_one_box(xyxy, im0, label=label, color=colors[int(cls)], line_thickness=2)
 
             # Print time (inference + NMS)
             print(f'{s}Done. ({t2 - t1:.3f}s)')
@@ -191,41 +200,47 @@ def detect(save_img=False):
             #         vid_writer.write(im0)
 
 
+            if opt.bboxfilt:
+                print("-----------------BBOX")
+                
+                boxes = bbox_filter.get_boxes()
+                #print("filt boxes",boxes)
 
-            boxes = bbox_filter.get_boxes()
-            #print("filt boxes",boxes)
-
-            for box in boxes:
-                print("b", box)
-                xyxy, conf, cls = box
-            #     label = '%s %.2f' % (names[cls], conf)
-            #     print(label, conf)
-            #     plot_one_box(b, im0, label=label, color=colors[cls], line_thickness=3)
+                for box in boxes:
+                    print("b", box)
+                    xyxy, conf, cls = box
+                #     label = '%s %.2f' % (names[cls], conf)
+                #     print(label, conf)
+                #     plot_one_box(b, im0, label=label, color=colors[cls], line_thickness=3)
 
 
-                if int(cls) > len(OBj_SIZES):
-                    sz = 1.0
-                else:
-                    sz = OBj_SIZES[int(cls)]
+                    if int(cls) > len(OBj_SIZES):
+                        sz = 1.0
+                    else:
+                        sz = OBj_SIZES[int(cls)]
 
-                eul, quat, dist = estimate_yaw_pitch_dist(CAM_FOVH, sz, imw, imh, x1, y1, x2, y2) 
+                    eul, quat, dist = estimate_yaw_pitch_dist(CAM_FOVH, sz, imw, imh, x1, y1, x2, y2) 
 
-                if save_img or view_img:  # Add bbox to image  
-                    # with quaternion                  
-                    # label = '%s %.2f %.1f %.2f %.2f %.2f %.2f' % (names[int(cls)], conf, dist, quat[0], quat[1], quat[2], quat[3])
-                    label = '%s %.2f %.1f' % (names[int(cls)], conf, dist)
+                    if save_img or view_img:  # Add bbox to image  
+                        # with quaternion                  
+                        # label = '%s %.2f %.1f %.2f %.2f %.2f %.2f' % (names[int(cls)], conf, dist, quat[0], quat[1], quat[2], quat[3])
+                        label = '%s %.2f %.1f' % (names[int(cls)], conf, dist)
 
-                    print(label)
-                    print("xyxy",xyxy)
-                    plot_one_box(xyxy, im0, label=label, color=colors[int(cls)], line_thickness=2)
+                        print(label)
+                        print("xyxy",xyxy)
+                        plot_one_box(xyxy, im0, label=label, color=colors[int(cls)], line_thickness=2)
 
-                if save_txt:  # Write to file
-                    xywh = (xyxy2xywh(torch.tensor(xyxy).view(1, 4)) / gn).view(-1).tolist()  # normalized xywh
-                    with open(txt_path + '.txt', 'a') as f:
-                        f.write(('%g ' * 5 + '\n') % (cls, *xywh))  # label format
+                    if save_txt:  # Write to file
+                        xywh = (xyxy2xywh(torch.tensor(xyxy).view(1, 4)) / gn).view(-1).tolist()  # normalized xywh
+                        with open(txt_path + '.txt', 'a') as f:
+                            f.write(('%g ' * 5 + '\n') % (cls, *xywh))  # label format
 
             if view_img:
                 cv2.imshow(str(p), im0)
+                k = cv2.waitKey(1)  # 1 millisecond
+
+                if k == 27: # ESC
+                    quit = True
 
             if save_img:
                 if dataset.mode == 'image':
@@ -269,6 +284,7 @@ if __name__ == '__main__':
     parser.add_argument('--update', action='store_true', help='update all models')
     parser.add_argument('--labels', default='', help='label file')
     parser.add_argument('--color', default='det', help='bbox colors --color same, --color rand, --color det') # det deterministic
+    parser.add_argument('--bboxfilt', action='store_true', help='bbox filtering')
 
     parser.add_argument('--project', default='runs/detect', help='save results to project/name')
     parser.add_argument('--name', default='exp', help='save results to project/name')
