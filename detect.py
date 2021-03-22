@@ -85,7 +85,7 @@ def detect(save_img=False):
 
     if opt.bboxfilt:
         # Detections filter
-        bbox_filter = BboxFilter(30, 5)
+        bbox_filter = BboxFilter(30, 5) # 30x30 pixel grids, 5 deep in time
 
     # Object sizes
     # se, comml, jet, heli, drone
